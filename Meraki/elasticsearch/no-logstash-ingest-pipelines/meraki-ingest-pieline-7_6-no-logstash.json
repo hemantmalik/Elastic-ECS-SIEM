@@ -1,0 +1,401 @@
+PUT /_ingest/pipeline/meraki-syslogs
+{
+  "description": """
+  Documentation: https://documentation.meraki.com/zGeneral_Administration/Monitoring_and_Reporting/Syslog_Server_Overview_and_Configuration
+  Port forward syslogs : https://community.meraki.com/t5/Security-SD-WAN/Syslog-and-Port-Redirects/m-p/73886
+  To process Meraki Syslogs. Version 1- for meraki URL syslog
+  Source: received over UDP by filebeat and sent to Elasticsearch
+  Format Samples:
+  URLs syslog example :1341 1587400854.428996718 CA1MX250_1 urls src=172.23.17.108:59691 dst=209.53.113.223:80 mac=F0:7F:06:44:4A:7C agent='Mozilla/5.0 (compatible; MSIE 8.0;)' request: POST http://search.namequery.com/
+  
+  Flows - Inbound syslog example : <134>1 1587570746.845311318 CA1MX250_1 flows src=207.102.237.2 dst=216.187.67.133 protocol=icmp type=0 pattern: allow all
+    
+    Type 2: <134>1 1587570746.845311318 CA1MX250_1 flows src=195.54.166.183 dst=207.102.237.118 protocol=tcp sport=46842 dport=63710 pattern: 1 dst 207.102.237.118
+  
+  Flows - Outbound syslog example :<134>1 1587570746.866019147 CA1MX250_1 flows src=172.23.17.112 dst=23.213.113.104 mac=F0:7F:06:44:4A:7C protocol=tcp sport=50730 dport=80 pattern: allow all
+  
+  ip_flow_end - syslog example :<134>1 1587570747.612314443 ip_flow_end src=172.23.1.123 dst=8.8.4.4 protocol=udp sport=64011 dport=53 translated_src_ip=72.142.62.68 translated_port=64011
+  
+  ip_flow_start - syslog example: <134>1 1587570747.612329791 ip_flow_start src=172.18.2.143 dst=104.153.59.210 protocol=tcp sport=63884 dport=8089 translated_src_ip=72.142.62.68 translated_port=63884
+                                  <134>1 1587570459.656412815 ip_flow_start src=69.175.97.172 dst=207.102.237.86 protocol=tcp sport=13926 dport=80 translated_dst_ip=172.16.148.195 translated_port=80
+  """,
+  "on_failure": [
+    {
+      "set": {
+        "field": "_index",
+        "value": "failed-{{ _index }}"
+      }
+    },
+    {
+      "set": {
+        "field": "error",
+        "value": "{{ _ingest.on_failure_message }}"
+      }
+    }
+  ],
+  "processors": [
+    {
+      "dissect": {
+        "field": "message",
+        "pattern": "%{ignoreid} %{millis}.%{nanos} %{observer.name} %{syslog.type} %{temp_message_rest}"
+      }
+    },
+    {
+      "set": {
+        "field": "temp_message_rest",
+        "value": "{{syslog.type}} {{temp_message_rest}}"
+      }
+    },
+    {
+      "date": {
+        "field": "millis",
+        "target_field": "@timestamp",
+        "formats": [
+          "UNIX"
+        ],
+        "timezone": "Etc/GMT+7"
+      }
+    },
+    {
+      "pipeline": {
+        "if": "ctx.observer?.name == 'ip_flow_start'",
+        "name": "meraki_syslogs_portforward"
+      }
+    },
+    {
+      "pipeline": {
+        "if": "ctx.observer?.name == 'ip_flow_end'",
+        "name": "meraki_syslogs_portforward"
+      }
+    },
+    {
+      "pipeline": {
+        "if": "ctx.syslog?.type == 'urls'",
+        "name": "meraki_syslogs_urls"
+      }
+    },
+    {
+      "pipeline": {
+        "if": "ctx.syslog?.type == 'flows'",
+        "name": "meraki_syslogs_flows"
+      }
+    },
+    {
+      "set": {
+        "field": "event.kind",
+        "value": "event"
+      }
+    },
+    {
+      "set": {
+        "field": "event.type",
+        "value": "connection"
+      }
+    },
+    {
+      "set": {
+        "field": "event.outcome",
+        "value": "success"
+      }
+    },
+    {
+      "set": {
+        "field": "event.dataset",
+        "value": "meraki"
+      }
+    }
+    
+  ]
+}
+
+#######################################################
+### Meraki Portforwarding syslog ingestion pipeline ###
+#######################################################
+PUT /_ingest/pipeline/meraki_syslogs_portforward
+{
+  "description": """
+  To process Meraki Syslogs. Version 1- for meraki URL syslog
+  Source: received over UDP by filebeat and sent to Elasticsearch
+  Format Samples:
+  Portforwarding syslog example :<134>1 1587570747.612314443 ip_flow_end src=172.23.1.123 dst=8.8.4.4 protocol=udp sport=64011 dport=53 translated_src_ip=72.142.62.68 translated_port=64011
+  """,
+  "processors": [
+    {
+      "set": {
+        "field": "temp_message_rest",
+        "value": "{{temp_message_rest}}"
+      }
+    },
+    {
+      "dissect": {
+        "field": "temp_message_rest",
+        "pattern": "src=%{source.ip} dst=%{destination.ip} protocol=%{network.protocol} sport=%{source.port} dport=%{destination.port} translated_src_ip=%{source.ip_translated} translated_port=%{source.port_translated}",
+        "on_failure": [
+            {
+              "dissect": {
+                "field": "temp_message_rest",
+                 "pattern": "src=%{source.ip} dst=%{destination.ip} protocol=%{network.protocol} sport=%{source.port} dport=%{destination.port} translated_dst_ip=%{destination.ip_translated} translated_port=%{destination.port_translated}",
+                 "on_failure": [
+                    {
+                        "dissect": {
+                          "field": "temp_message_rest",
+                           "pattern": "src=%{source.ip} dst=%{destination.ip} protocol=%{network.protocol} translated_dst_ip=%{destination.ip_translated}"
+                        }
+                      
+                    }
+                  ] 
+              }
+            }
+          ]
+      }
+      
+    },
+    {
+      "remove": {
+        "field": ["nanos", "millis", "temp_message_rest", "ignoreid", "syslog" ],
+        "ignore_failure": true
+      }
+    },
+    {
+      "set": {
+        "field": "observer.name",
+        "value": "meraki.syslogs.portforward"
+      }
+    },
+    {
+      "pipeline": {
+        "name": "geoip-info"
+      }
+    }
+  ]
+}
+
+
+#######################################################
+######### Meraki URL syslog ingestion pipeline ########
+#######################################################
+PUT /_ingest/pipeline/meraki_syslogs_urls
+{
+  "description": """
+  To process Meraki Syslogs. Version 1- for meraki URL syslog
+  Source: received over UDP by filebeat and sent to Elasticsearch
+  Format Samples:
+  URLs syslog example :1587400854.428996718 CA1MX250_1 urls src=172.23.17.108:59691 dst=209.53.113.223:80 mac=F0:7F:06:44:4A:7C agent='Mozilla/5.0 (compatible; MSIE 8.0;)' request: POST http://search.namequery.com/
+  """,
+  "processors": [
+    {
+      "set": {
+        "field": "temp_message_rest",
+        "value": "{{syslog.type}} {{temp_message_rest}}"
+      }
+    },
+    {
+      "dissect": {
+        "field": "temp_message_rest",
+        "pattern": "%{event.module} src=%{source.ip}:%{source.port} dst=%{destination.ip}:%{destination.port} mac=%{source.mac} agent='%{user_agent.original}' request: %{http.request.method} %{url.original}"
+      }
+    },
+    {
+          "dissect": {
+            "field": "url.original",
+            "pattern": "http://%{url.domain}/",
+            "ignore_missing" : true,
+            "on_failure": [
+              {
+                 "dissect": {
+                 "field": "url.original",
+                 "pattern": "https://%{url.domain}/"
+                }
+              }
+              ]
+          }
+    },
+    {
+      "remove": {
+        "field": ["nanos", "millis", "temp_message_rest", "ignoreid", "syslog" ],
+        "ignore_failure": true
+      }
+    },
+    {
+      "set": {
+        "field": "observer.name",
+        "value": "meraki.syslogs.urls"
+      }
+    },
+    
+    {
+       "set": {
+       "field": "event.category",
+        "value": "web"
+      }
+    },
+    {
+        "user_agent" : {
+          "ignore_missing" : true,
+          "field" : "useragent"
+        }
+    },
+    {
+      "pipeline": {
+        "name": "geoip-info"
+      }
+    }
+  ]
+}
+
+#######################################################
+####### Meraki Flows syslog ingestion pipeline ########
+#######################################################
+PUT /_ingest/pipeline/meraki_syslogs_flows
+{
+  "description": """
+  To process Meraki Syslogs. Version 1- for meraki URL syslog
+  Source: received over UDP by filebeat and sent to Elasticsearch
+  Format Samples:
+  URLs syslog example :1587400854.428996718 CA1MX250_1 urls src=172.23.17.108:59691 dst=209.53.113.223:80 mac=F0:7F:06:44:4A:7C agent='Mozilla/5.0 (compatible; MSIE 8.0;)' request: POST http://search.namequery.com/
+  """,
+  "processors": [
+    {
+      "set": {
+        "field": "temp_message_rest",
+        "value": "{{temp_message_rest}}"
+      }
+    },
+    {
+      "dissect": {
+        "field": "temp_message_rest",
+        "pattern": "%{event.module} src=%{source.ip} dst=%{destination.ip} mac=%{source.mac} protocol=%{network.protocol} sport=%{source.port} dport=%{destination.port} pattern: %{pattern}",
+        "on_failure": [
+          {
+            "dissect": {
+              "field": "temp_message_rest",
+              "pattern": "%{event.module} src=%{source.ip} dst=%{destination.ip} protocol=%{network.protocol} type=%{action.type} pattern: %{pattern}",
+              "ignore_missing": true,
+              "on_failure": [
+                {
+                  "dissect": {
+                    "field": "temp_message_rest",
+                    "pattern": "%{event.module} src=%{source.ip} dst=%{destination.ip} protocol=%{network.protocol} sport=%{source.port} dport=%{destination.port} pattern: %{pattern}",
+                    "ignore_missing": true
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "remove": {
+        "field": ["nanos", "millis", "temp_message_rest", "ignoreid", "syslog", "action" ],
+        "ignore_failure": true
+      }
+    },
+    {
+      "set": {
+        "field": "observer.name",
+        "value": "meraki.syslogs.flows"
+      }
+    },
+    {
+      "pipeline": {
+        "name": "geoip-info"
+      }
+    }
+  ]
+}
+
+
+#######################################################
+########## geoip-info enrichment pipeline #############
+#######################################################
+PUT /_ingest/pipeline/geoip-info
+{
+  "description": "Enrich IP with GEO information", 
+  "processors": [
+      {
+        "geoip" : {
+          "if" : "ctx.source?.geo == null",
+          "field" : "source.ip",
+          "target_field" : "source.geo",
+          "ignore_missing" : true
+        }
+      },
+      {
+        "geoip" : {
+          "if" : "ctx.destination?.geo == null",
+          "field" : "destination.ip",
+          "target_field" : "destination.geo",
+          "ignore_missing" : true
+        }
+      },
+      {
+        "geoip" : {
+          "if" : "ctx.source?.as == null",
+          "field" : "source.ip",
+          "target_field" : "source.as",
+          "properties" : [
+            "asn",
+            "organization_name"
+          ],
+          "ignore_missing" : true,
+          "database_file" : "GeoLite2-ASN.mmdb"
+        }
+      },
+      {
+        "geoip" : {
+          "if" : "ctx.destination?.as == null",
+          "database_file" : "GeoLite2-ASN.mmdb",
+          "field" : "destination.ip",
+          "target_field" : "destination.as",
+          "properties" : [
+            "asn",
+            "organization_name"
+          ],
+          "ignore_missing" : true
+        }
+      },
+      {
+        "rename" : {
+          "ignore_missing" : true,
+          "field" : "source.as.asn",
+          "target_field" : "source.as.number"
+        }
+      },
+      {
+        "rename" : {
+          "ignore_missing" : true,
+          "field" : "source.as.organization_name",
+          "target_field" : "source.as.organization.name"
+        }
+      },
+      {
+        "rename" : {
+          "ignore_missing" : true,
+          "field" : "destination.as.asn",
+          "target_field" : "destination.as.number"
+        }
+      },
+      {
+        "rename" : {
+          "ignore_missing" : true,
+          "field" : "destination.as.organization_name",
+          "target_field" : "destination.as.organization.name"
+        }
+      }
+  ]
+}
+
+
+POST /_ingest/pipeline/meraki-syslogs/_simulate
+{
+  "docs": [
+    {
+      "_index": "index",
+      "_id": "id",
+      "_source": {
+        "message": "<134>1 1587570760.382170104 CA1MX250_1 flows src=172.23.16.242 dst=10.100.147.9 mac=F0:7F:06:44:4A:7C protocol=tcp sport=59173 dport=4567 pattern: allow all"
+      }
+    }
+    ]
+}
