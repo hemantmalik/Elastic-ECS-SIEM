@@ -22,3 +22,6 @@ Some day I'll add some dashboards.
 
 Theres also a logstash directory that I'll put snippets in, currently (Thanks Derek) theres
 a ruby implementastion of the general network community_id processor.
+
+### Meraki/elasticsearch/no-logstash-ingest-pipelines folder
+This folder contains ingest pipelines that assume no logstash in the data pipeline thus making it optional and doing the heavylifting of also conditional structuring of incoming meraki syslogs to ECS format. Testing setup included Meraki => Filebeat(UDP Input) => Elasticsearch (ingest-pipelines)
