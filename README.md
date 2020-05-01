@@ -1,5 +1,6 @@
 # Elastic-ECS-SIEM
-Configs and snippets for Elastic SIEM / ECS 
+Configs and snippets for Elastic SIEM / ECS
+
 _Fork of Dain's work from https://github.com/dainperkins/Elastic-ECS-SIEM/_
 ## Overview
 If you happened to see the Elastic SIEM / ECS Webinar this is the spot where I'll 
